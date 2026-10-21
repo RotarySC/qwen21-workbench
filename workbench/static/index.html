@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080B14">
+<title>出图工作台</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<!-- 页面脚本没跑起来时，这一块负责**说话**（P20k）。
+     为什么必须有：2026-10-03 用户看到的是一张冷脸 —— 「连接中…」永远不变、
+     点哪儿都没反应（后端开关、日志、提交全一样）。原因是浏览器手里那份 `app.js`
+     与这份 HTML **不是同一版**（缓存里那份旧的，或者它压根没加载成功），于是
+     `init()` 在第一行就抛，后面一行都不跑。这类坏法**没有任何症状**，只能靠页面
+     自己喊出来 —— 它必须排在 `app.js` **之前**（脚本在后面才加载）。
+
+     判据只有一条：`init()` 跑完会置 `window.__wb_booted = true`。
+     2.5 秒后还没置，就把横幅画出来（连同捕获到的错误）。 -->
+<script>
+(function () {
+  var errs = [];
+  window.__wb_boot_errors = errs;
+  // 捕获阶段才收得到资源加载失败（script/link 的 error 不冒泡到 window 的冒泡阶段）。
+  // 只记脚本/样式这一类；图片取不到是**常态**（产物被删、后端没起），不该混进来。
+  window.addEventListener("error", function (event) {
+    var el = event.target;
+    if (el && el !== window && el.tagName && ["SCRIPT", "LINK"].indexOf(el.tagName) < 0) {
+      return;
+    }
+    errs.push(event.message
+      || ((el && (el.src || el.href)) ? ("加载失败：" + (el.src || el.href)) : "脚本错误"));
+  }, true);
+  window.addEventListener("unhandledrejection", function (event) {
+    var why = event.reason;
+    errs.push("未处理的 Promise：" + ((why && why.message) || why));
+  });
+  window.setTimeout(function () {
+    if (window.__wb_booted) return;
+    var box = document.createElement("div");
+    box.id = "boot-warn";
+    box.setAttribute("role", "alert");
+    var head = document.createElement("strong");
+    head.textContent = "这个页面上的脚本没跑起来";
+    var why = document.createElement("div");
+    why.textContent = "页面长这样，但所有按钮都不会有反应（后端开关、日志、提交都一样）。"
+      + "多半是浏览器手里那份 app.js 与这一页不是同一版，或者它没加载成功。";
+    var fix = document.createElement("div");
+    fix.className = "dim";
+    fix.textContent = "按 Ctrl+Shift+R 强制刷新一下就好；还是不行就把下面这段报出来：";
+    var pre = document.createElement("pre");
+    pre.textContent = errs.length ? errs.join("\n")
+                                  : "（没有捕获到任何错误 —— 脚本可能根本没加载）";
+    box.appendChild(head); box.appendChild(why); box.appendChild(fix); box.appendChild(pre);
+    document.body.appendChild(box);
+  }, 2500);
+})();
+</script>
+<a class="skip-link" href="#workspace">跳到工作区</a>
+<div class="workbench-shell">
+
+<header class="top">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 36 36" fill="none" aria-hidden="true"><path d="M18 3 31 10.5v15L18 33 5 25.5v-15L18 3Z" stroke="currentColor" stroke-width="1.5"/><path d="m12 14 6-3.5 6 3.5v8l-6 3.5-6-3.5v-8Z" stroke="currentColor" stroke-width="1.5"/><path d="m18 18 13-7.5M18 18v15M18 18 5 10.5" stroke="currentColor" stroke-width="1.5"/></svg>
+    <div class="brand-copy"><h1>出图工作台</h1><p>Qwen-Image-2.1 · MiniMax H3 · See-through</p></div>
+  </div>
+  <div class="top-right">
+    <!-- 后端开关（P20i）。**整颗开关上没有文字** —— 这是用户要的形状：状态全在
+         开关本身（滑块位置 + 颜色）和它的悬停提示（`title`，由 app.js 按状态
+         现场算）里。原来那一整块「后端未运行 + 可复制的命令 + 一键启动 + 模型
+         芯片」的告警板**整个撤掉**了：后端没起是常态，一块红色告警板不该长在
+         常态上。撤掉的三样各有去处 ——
+           · 启动命令 → 日志台「环境体检」那一行（带复制），那才是它的位置；
+           · 启动日志/失败原因 → 日志台（后端日志那一栏本来就在读同一份文件）；
+           · 模型芯片 → 日志台「环境体检」的「模型」那一行（同一份数据）。
+         `role="switch"` + `aria-checked`：听上去它是一颗开关，而不是「一个没名字
+         的图形」—— 名字走 `aria-label`，由 app.js 随状态更新。 -->
+    <button class="power" id="be-switch" type="button" role="switch"
+            aria-checked="false" aria-label="后端开关 · 正在检查"
+            data-state="checking" title="正在检查后端…"><span class="pow-track"
+            aria-hidden="true"><span class="pow-knob"></span></span></button>
+    <span class="connection dim" id="sse-state" role="status">连接中…</span>
+    <span class="dim" id="queue-info"></span>
+    <!-- 日志台入口。放在顶栏而不是右栏的标签里：它回答的是「整个工作台 + 后端
+         现在怎么样」，不属于「成果」那一栏；而且出事的时候（SSE 断了、后端没起）
+         右栏本身可能就是那件出事的東西。 -->
+    <button class="ghost icon-text" id="btn-logs" type="button"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h14v16H5z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 9h8M8 12.5h8M8 16h5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>日志</button>
+    <button class="ghost icon-text" id="btn-refresh" type="button"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6.1 6.1A8 8 0 0 1 20 12M4 12a8 8 0 0 0 13.9 5.9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>刷新状态</button>
+  </div>
+</header>
+
+<!-- 这一层原来是一整块告警板（后端没起时把可复制的命令、一键启动、模型芯片全
+     铺在页面上）。2026-10-02 按用户要求撤掉，改由顶栏那颗开关承担，
+     三样东西各自搬去了日志台 —— 见 `header` 里那段注释。 -->
+
+<main class="workspace" id="workspace">
+  <!-- 左：表单 -->
+  <section class="panel control-panel" aria-labelledby="control-title">
+    <div class="panel-heading"><div><span class="eyebrow">01 / INPUT</span><h2 id="control-title">创作控制台</h2></div><span class="panel-tag" id="chain-tag">QWEN-IMAGE-2.1</span></div>
+    <div class="control-scroll" id="control-scroll">
+
+    <!-- 链路：三颗**平级**的分段按钮（P21c）。
+         为什么是两级而不是把 H3 / See-through 塞进下面那个「生成模式」下拉框：
+         那个下拉框装的是**同一条链路的三种形状**（文生图 / 图生图 / 放大），而
+         H3 与 See-through 是**另外两条链路** —— 模型不同、图不同、产物也不同。
+         混在一起会让「模式」继续当杂物箱，而那正是 2026-10-01 撤掉 `2k` / `refine`
+         时要治的病。
+
+         **线路上仍只有一个 `mode` 字段**（见 server.ALL_MODES）：这里的选择只决定
+         「去哪儿取 mode」——Qwen 那一档取下面那个下拉框，另两档就是它自己。
+         刻意不引入一个平行的 `chain` 字段，那会让「哪条链路」有两份真源。
+
+         `role="radiogroup"` 而不是 `tablist`：三者是**互斥的选择**，
+         而它们各自的字段块并没有包成三个 tabpanel（那要重构 DOM）。
+         报成 tab 却在页面上找不到对应的 tabpanel，对读屏是不诚实的。
+         滑块由 JS 量出选中那颗的 offsetLeft/offsetWidth 平移过来（照抄
+         `.result-tabs` 那套，见 app.js 的 placeThumb）。 -->
+    <div class="chain-tabs" id="chain-tabs" role="radiogroup" aria-label="链路">
+      <i class="chain-thumb" id="chain-thumb" aria-hidden="true"></i>
+      <button class="chain-tab" type="button" role="radio" aria-checked="true"
+              id="chain-qwen" data-chain="qwen">Qwen-Image-2.1</button>
+      <button class="chain-tab" type="button" role="radio" aria-checked="false"
+              id="chain-h3" data-chain="h3">MiniMax H3</button>
+      <button class="chain-tab" type="button" role="radio" aria-checked="false"
+              id="chain-layers" data-chain="layers">See-through</button>
+    </div>
+
+    <label class="field" id="mode-wrap">
+      <span>生成模式</span>
+      <select id="mode">
+        <option value="t2i">T2I · 纯文生图</option>
+        <option value="edit">Edit · 图生图 / 局部编辑</option>
+        <option value="upscale">放大 · VOSR2 超分</option>
+      </select>
+    </label>
+    <!-- 这里**只有「形状」**（2026-10-01 重构）：文生图 / 图生图 / 放大超分。
+         被撤掉的两个值原本是同一张图的**配置**，却挤在这个下拉框里：
+           `2k`     = 分辨率，现在就在下面的「尺寸」里调（2048×2048 那一档还在）；
+           `refine` = 提示词改写器，现在是「高级设置」里的一个开关。
+         两个都不再是模式 —— 复述一遍的原因是这个坑很自然：**新的开关不要往
+         这个下拉框里加**，它只回答「用哪条链路」。 -->
+
+    <!-- 源图 / 参考图：图生图与放大都要它，所以放在**主区**而不是「高级」里 ——
+         对这两种模式它是最主要的输入，藏在折叠里会让人找不到。
+         两种模式共用同一个字段（同一个上传通道），不各来一份。
+
+         版面按「**虚线框永远在，选中的图缩小显示在框下面**」来排：
+         虚线框是稳定的入口（点它开选择器 / 往里拖），下面的缩略图是结果。
+         把预览塞进框里（上一版就是这样）会让框在选中之后整个变形，
+         看起来像换了个控件 —— 而它其实还是那个可以继续拖的框。
+
+         虚线框里那个 `#src-file` 是**真的** file input（`.sr-only` 藏起来）：
+         浏览器的文件选择器只有它能开，而 CDP/无头环境里它也照样工作。
+
+         **上传只有这一条路**：手打文件名那个输入框（带 `input/` 清单的 datalist）
+         已按用户要求去掉 —— 它给的是「填上名字但图根本不在这」的假路径，而
+         上传这条路会把后端回执里的**真名字**填进来。选中集因此从「那个文本框的
+         value」搬进了 `state.refs`（见 app.js），页面上不再有它的影子。 -->
+    <div class="field hidden" id="src-wrap">
+      <span id="src-label">参考图</span>
+
+      <div class="ref-drop" id="ref-drop" role="button" tabindex="0"
+           aria-describedby="ref-drop-note">
+        <div class="ref-empty" id="ref-empty">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5" stroke="currentColor" stroke-width="1.5"/><circle cx="8.5" cy="9.5" r="1.6" stroke="currentColor" stroke-width="1.5"/><path d="m4 17 4.6-4.3 3.1 2.7 3.4-4.6L20 16" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
+          <strong id="ref-drop-hint">素材</strong>
+          <span class="dim" id="ref-drop-note">点击选择，或把图片拖到这里</span>
+        </div>
+      </div>
+
+      <!-- 选中的图在这里：**大图方块**，一行排开、可换行。
+           一张与多张走**同一条路**，不做「单张特例」——特例迟早会分家。
+           方块里只有**图**：文件名移到 `title`（悬停/读屏都拿得到），
+           因为文件名在卡片上会撑成一条长短不一的文字，把方阵排得七零八落；
+           而这一栏要回答的问题是「选了哪几张」，那是**图**回答得更好。
+           × 是**角标**（右上），序号是**角标**（左上，两张以上才出现）——
+           序号不是装饰：第一张决定输出尺寸，多张时它是唯一的顺序线索。
+           × 平时**不显示**（2026-10-01 按用户要求）：悬停到这一块上、或 Tab 到
+           它才浮出来。判据在 style.css 那条 `@media (hover: hover)` 里 ——
+           触摸屏（没有悬停这回事）上它是常显的，键盘也照样拿得到。 -->
+      <div class="ref-picked hidden" id="ref-picked" role="list"></div>
+
+      <input type="file" id="src-file" accept="image/*" multiple class="sr-only"
+             tabindex="-1" aria-label="选择源图或参考图文件">
+      <div class="upload-row">
+        <button class="ghost hidden" id="btn-clear-ref" type="button">清空</button>
+      </div>
+      <span class="dim" id="upload-msg" role="status"></span>
+      <span class="dim" id="src-info">正在读后端的 input/ 目录…</span>
+    </div>
+
+    <!-- 放大倍数：只有放大模式用。1~16 是插件自己的范围。 -->
+    <div class="row hidden" id="upscale-wrap">
+      <label class="field">
+        <span>放大倍数</span>
+        <select id="scale">
+          <option value="2">×2</option>
+          <option value="3">×3</option>
+          <option value="4">×4</option>
+          <option value="6">×6</option>
+          <option value="8">×8</option>
+        </select>
+      </label>
+      <!-- 折叠块只说**功能事实**（2026-10-01 按用户要求收窄）：耗时与实测对比
+           这类证据不上页面，它们在 `docs/details.md`。 -->
+      <details class="help-details"><summary>放大方式</summary><p class="check-note dim">
+        输出尺寸 = 源图尺寸 × 倍数；按源图重画（生成式超分），不是插值放大。
+      </p></details>
+    </div>
+
+    <!-- MiniMax H3：时长。它是这条链路唯一的「数值」旋钮 —— 步数是蒸馏 LoRA 的
+         固定档（4 步），尺寸冻结在基准图里（480×864 / 9:16）。不放开那两样的
+         理由写在 `h3_build.py` 的模块文档里。
+
+         旁边那句「124 帧 / 5.17 秒」**不是写死的文案**：基准图里有一个
+         `ComfyMathExpression` 把秒数吸附到 17 帧网格上，所以用户选的 5 秒真正
+         跑出来是 124 帧。那个数由后端从图里反解出来（`describe.frames`），
+         页面只负责显示 —— 在页面上再抄一份公式，迟早就与图里那份分家。 -->
+    <div class="row hidden" id="h3-wrap">
+      <label class="field">
+        <span>时长</span>
+        <select id="h3-seconds">
+          <option value="5">5 秒</option>
+          <option value="10">10 秒</option>
+        </select>
+      </label>
+      <span class="dim check-note" id="h3-frames"></span>
+    </div>
+
+    <!-- See-through 拆层：两个旋钮。没有提示词（这条链路没有文本编码器），也没有
+         cfg；步数复用下面「基础参数」里那一格（`#steps-wrap`）。「深度分辨率」的
+         「跟随分辨率」就是插件自己的 `-1`。
+
+         层数**不预判**：实测 1024 得 23 层、1280 得 24 层，而它会随分辨率与种子
+         变。所以这里不写「约 24 层」那种数，跑完按产物如实列。 -->
+    <div class="row hidden" id="layers-wrap">
+      <label class="field">
+        <span>分辨率</span>
+        <select id="layers-resolution">
+          <option value="1024">1024</option>
+          <option value="1280">1280</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>深度分辨率</span>
+        <select id="layers-depth">
+          <option value="-1">跟随分辨率</option>
+          <option value="512">512</option>
+          <option value="640">640</option>
+          <option value="768">768</option>
+        </select>
+      </label>
+    </div>
+
+    <label class="field" id="prompt-wrap">
+      <span class="field-heading">提示词 <span class="field-kicker">PROMPT</span></span>
+      <textarea id="prompt" rows="6" placeholder="描述画面主体、风格、光线与细节…"></textarea>
+      <span class="counter dim"><span id="prompt-len">0</span> 字</span>
+    </label>
+    <!-- LLM 增强：**只有这一颗按钮**（2026-10-01 按用户要求改的形状）。
+         它不再「属于提示词框」，而是「打开增强面板」—— 面板里既有**要增强的文本**
+         （可编辑），也有**触发增强**的那颗按钮，还有对照与采用。
+         原来的形状是每个框一颗按钮（提示词一颗、反向词一颗），加一个可增强的
+         东西就要加一颗按钮 —— 扩展不动。现在目标由**后端**那张表给
+         （`llm.TARGETS_INFO` → `/api/llm` 的 `targets`），面板按它建下拉框。
+
+         按钮**在 label 之外**：`<label>` 里的按钮被点时会连带激活它标注的那个
+         textarea，于是点击的落点会飘 —— 看起来只是「点不准」。
+         与上一版不同，**提示词框空着时它也叫得动** —— 面板里就是输入区，
+         空着进去再写正是这个形状的意义。 -->
+    <div class="actions field-actions" id="prompt-actions">
+      <button class="ghost" id="btn-enhance" type="button">LLM 增强</button>
+    </div>
+
+    <!-- 反向词：**默认折叠**。折叠标题上带状态字 —— 折起来也看得出它生不生效，
+         否则这就成了一个藏起来的失效开关（本工作区最忌讳的那种错）。
+         判断由后端算（`server.py::negative_prompt_state`：CFG=1.0 时负向分支
+         根本不被求值，实测两段完全不同的反向词出图**逐字节相同**），
+         这里只负责显示；长解释在下方提交区的 warnings 里，不在此处复述。 -->
+    <details class="foldout" id="negative-wrap">
+      <summary>反向词 <span class="dim" id="negative-hint"></span></summary>
+      <label class="field" id="negative-field">
+        <span class="field-heading">不希望出现的元素 <span class="field-kicker">NEGATIVE</span></span>
+        <textarea id="negative" rows="3" placeholder="blurry, low quality, watermark, text…"></textarea>
+        <span class="counter dim"><span id="negative-len">0</span> 字</span>
+      </label>
+      <p class="check-note dim">写你不希望出现的元素，英文逗号分隔。</p>
+      <div class="actions">
+        <button class="ghost hidden" id="btn-raise-cfg" type="button"></button>
+      </div>
+    </details>
+
+    <details class="foldout library" id="library">
+      <summary>提示词库 <span class="dim" id="lib-count"></span></summary>
+      <div class="lib-bar">
+        <button class="ghost" id="btn-save-prompt">保存当前提示词</button>
+        <input type="search" id="lib-search" placeholder="搜索标题 / 正文 / 标签…" aria-label="搜索提示词库">
+      </div>
+      <div class="lib-list" id="lib-list"><p class="dim">还没有保存过提示词。</p></div>
+    </details>
+
+    <div class="section-label"><span>基础参数</span><span class="eyebrow">PARAMETERS</span></div>
+    <div class="row" id="gen-row">
+      <!-- 步数与尺寸**各自一个 id**：拆层要步数但不要尺寸（它没有「输出尺寸」这个
+           概念，只有拆层分辨率），而 H3 两样都不要。整行一起藏会让拆层连步数
+           一起没了 —— 那是个不报错、只是少一格控件的坏法。 -->
+      <label class="field" id="steps-wrap">
+        <span>步数</span>
+        <input type="number" id="steps" value="20" min="1" max="200">
+      </label>
+      <label class="field" id="size-wrap">
+        <span>尺寸</span>
+        <select id="size">
+          <option value="1024x1024">1024 × 1024</option>
+          <option value="1280x768">1280 × 768</option>
+          <option value="768x1280">768 × 1280</option>
+          <option value="2048x2048">2048 × 2048（2K）</option>
+          <option value="custom">自定义…</option>
+        </select>
+      </label>
+      <label class="field hidden" id="size-custom-wrap">
+        <span>宽 / 高（32 的倍数）</span>
+        <span class="pair">
+          <input type="number" id="width" step="32" min="64" aria-label="自定义宽度">
+          <input type="number" id="height" step="32" min="64" aria-label="自定义高度">
+        </span>
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="field">
+        <span>种子</span>
+        <span class="pair">
+          <input type="number" id="seed" min="0">
+          <button class="ghost dice" id="btn-dice" type="button" title="随机种子" aria-label="随机生成种子"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h.01M16 8h.01M12 12h.01M8 16h.01M16 16h.01" stroke="currentColor" stroke-width="3" stroke-linecap="round"/></svg></button>
+        </span>
+      </label>
+      <label class="field" id="cfg-wrap">
+        <span>CFG</span>
+        <input type="number" id="cfg" value="1.0" step="0.1" min="0">
+      </label>
+    </div>
+
+    <details class="foldout advanced" id="advanced-wrap">
+      <summary>高级设置 <span class="dim">采样 · 改写 · 加速</span></summary>
+
+      <!-- 采样器 / 调度器放在最前（2026-10-01 按用户要求）：它们是这一步**最常动**
+           的两个，而改写器与两个加速都是可选的额外功能。 -->
+      <div class="row">
+        <label class="field">
+          <span>采样器</span>
+          <select id="sampler">
+            <option value="euler">euler</option>
+            <option value="euler_ancestral">euler_ancestral</option>
+            <option value="heun">heun</option>
+            <option value="dpmpp_2m">dpmpp_2m</option>
+            <option value="dpmpp_2m_sde">dpmpp_2m_sde</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>调度器</span>
+          <select id="scheduler">
+            <option value="simple">simple</option>
+            <option value="normal">normal</option>
+            <option value="karras">karras</option>
+            <option value="beta">beta</option>
+            <option value="sgm_uniform">sgm_uniform</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- 提示词改写器：**额外功能，不是模式**（2026-10-01 起）。
+           只在文生图下出现 —— 图生图那条链路会把改写器节点整段删掉，本机也没
+           有图生图版改写器（只有 pe_t2i），所以那里勾了也接不上；与其给一个
+           勾不动的开关，索性整块藏起来。**页面上不再解释这件事**（2026-10-01
+           按用户要求，提示只留功能描述），理由留在这里。 -->
+      <div id="rewrite-wrap">
+        <label class="check">
+          <input type="checkbox" id="rewrite">
+          <span>提示词改写器</span>
+        </label>
+        <p class="check-note dim">出图前先由改写器把提示词改写成八步结构。</p>
+      </div>
+
+      <!-- 两个加速开关的**折叠块已撤**（2026-10-01 按用户要求：里面只有一句
+           「勾一个，另一个会自动弹掉」，而那句话本身就是结论 —— 折起来还要点一下
+           才看得到，不如直接写进提示行。约束留在这里：两条都要说，因为用户可能
+           先看到任意一个。 -->
+      <!-- Turbo：**第三个加速开关，位置在 TE-Speed 之前**，因为它在链上也更靠前
+           （`QwenImage21Cache → Turbo LoRA → TE-Speed/LazyCache → KSampler`）。
+           与前两个**不互斥** —— 它是权重补丁，不抢那条线，所以它没有「勾一个弹掉
+           另一个」那句话。注意：注释里也**不许出现那三个字** —— 判据数的是
+           `advanced-wrap` 原始片段里的次数，而它**先剥标签、不剥注释**。 -->
+      <label class="check">
+        <input type="checkbox" id="turbo">
+        <span>Turbo 加速</span>
+      </label>
+      <p class="check-note dim">挂上官方蒸馏权重，用更少步数出图；代价是背景明暗略变淡，可与下面两个叠加。</p>
+
+      <label class="check">
+        <input type="checkbox" id="te_speed">
+        <span>TE-Speed 加速（推荐）</span>
+      </label>
+      <p class="check-note dim">采样段加速，画面细节基本不变；与 LazyCache 只能二选一。</p>
+
+      <label class="check">
+        <input type="checkbox" id="lazy_cache">
+        <span>缓存加速（LazyCache）</span>
+      </label>
+      <p class="check-note dim">采样段加速，代价是高频细节会被抹平；与 TE-Speed 只能二选一。</p>
+
+      <!-- 出图后自动放大：**额外功能，不是模式**（2026-10-01 起）。
+           放大模式（下拉里那一项）是「这次提交就是一次超分」；这个是
+           「出完图之后，把这张再喂给 VOSR2 超分一遍」—— 那是**第二个作业**，
+           两张图都会进画廊。两者不能叠（放大模式下这一块会藏起来）。 -->
+      <div id="chain-wrap">
+        <label class="check">
+          <input type="checkbox" id="auto_upscale">
+          <span>出图后自动放大</span>
+        </label>
+        <p class="check-note dim">出图后再把这张喂给 VOSR2 放大一遍：会产生<strong>第二个作业</strong>，
+          两张图都会进画廊。</p>
+        <label class="field"><span>放大倍数</span>
+          <select id="auto_scale">
+            <option value="2">×2</option>
+            <option value="3">×3</option>
+            <option value="4">×4</option>
+            <option value="6">×6</option>
+            <option value="8">×8</option>
+          </select>
+        </label>
+      </div>
+
+      <!-- LLM 增强设置放在**最后**：它是一次性配置，不是每次出图都会动的旋钮
+           （上面那几块是）。入口不靠这里 —— 提示词与反向词各自的增强按钮就在
+           它们自己的框旁边；这里是「按钮说没配好」之后要来的地方。 -->
+      <details class="foldout" id="llm-wrap">
+        <summary>LLM 增强设置 <span class="dim" id="llm-state">未配置</span></summary>
+        <label class="field"><span>接口地址（base_url）</span>
+          <input type="text" id="llm-base" placeholder="https://api.example.com/v1"
+                 autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span>模型名</span>
+          <input type="text" id="llm-model" placeholder="模型名" autocomplete="off"
+                 spellcheck="false"></label>
+        <label class="field"><span>密钥</span>
+          <input type="password" id="llm-key" placeholder="留空 = 保持原样"
+                 autocomplete="new-password"></label>
+        <label class="field"><span>超时（秒）</span>
+          <input type="number" id="llm-timeout" min="5" max="600" step="5" value="60"></label>
+        <label class="field"><span>补充要求（可选）</span>
+          <textarea id="llm-system" rows="2" placeholder="留空就只用内置规则"></textarea></label>
+        <div class="actions">
+          <button class="ghost" id="btn-llm-save" type="button">保存</button>
+          <span class="dim" id="llm-msg" role="status"></span>
+        </div>
+        <!-- 这里**不再有二级折叠块**（2026-10-01 定稿）：用户明确定了「高级设置里
+             不许再有折叠块」这个形状，所以内置规则就用这一行说完。完整的规则文本
+             在 `llm.py::SYSTEM_BASE`（唯一真源），不在页面上抄第二份。 -->
+        <p class="check-note dim">任何 OpenAI 兼容的 <code>/chat/completions</code> 端点都行。</p>
+        <p class="check-note dim">内置规则：提示词改写得具体些，反向词整理成逗号分隔的元素表。</p>
+      </details>
+    </details>
+
+    <details class="foldout sweep-panel" id="sweep-panel">
+      <summary>参数扫描 <span class="dim" id="sweep-hint">批量比较</span></summary>
+      <p class="dim">每格就是一次普通出图，只换 seed 或步数；两条轴都给就是笛卡尔积。</p>
+      <!-- 链在扫描里被剥掉（见 sweep.expand），这里把这件事说出来 -->
+      <p class="dim" id="sweep-chain-note"></p>
+      <div class="sweep-inputs">
+        <label class="field">
+          <span>seed 列表（逗号分隔）</span>
+          <input type="text" id="sweep-seeds" placeholder="11, 22, 33">
+        </label>
+        <label class="field" id="sweep-steps-wrap">
+          <span>steps 列表（留空 = 不扫步数）</span>
+          <input type="text" id="sweep-steps" placeholder="">
+        </label>
+      </div>
+      <div class="actions">
+        <button class="ghost" id="btn-sweep">扫描</button>
+        <span class="dim" id="sweep-msg" role="status"></span>
+      </div>
+      <div class="sweep-grid" id="sweep-grid"></div>
+    </details>
+    <details class="help-details workspace-help"><summary>工作台使用说明</summary><p class="dim">画廊直接读取多个输出目录中的 PNG，后端未启动也能浏览历史。每张图只用一行小标签标出模式、耗时与非本链路；seed、步数、来源目录、参考图与完整提示词都在点开的大图里。格子上的「载入参数」只把数值参数（步数 / seed / CFG / 采样器 / 尺寸）填回表单，提示词、模式与参考图不动。队列由 ComfyUI 执行，关闭页面不会中断任务，刷新后可以继续查看进度。</p></details>
+    </div>
+    <div class="submit-dock">
+      <!-- 这里只有**警告**，没有耗时估算（2026-10-01 按用户要求去掉了）：估时行
+           连同它下面那些说明性提示都不再上页面。会拦人的东西一件没少 ——
+           「提交必然失败」那一类、反向词填了不生效、2K 约 11 分钟仍然照说；
+           估时本身仍在 `/api/build` 与任务记录里（`estimate_s`，进度面板照显）。 -->
+      <div class="warnings" id="warnings"></div>
+      <span class="dim confirm-hint" id="confirm-hint"></span>
+      <button class="primary run-button" id="btn-run" type="button"><span id="run-label">出图</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <span class="dim run-msg" id="run-msg" role="status"></span>
+    </div>
+  </section>
+
+  <!-- 右：进度与结果 -->
+  <section class="panel results-panel" aria-labelledby="results-title">
+    <div class="panel-heading results-heading">
+      <div><span class="eyebrow">02 / OUTPUT</span><h2 id="results-title">成果空间</h2></div>
+      <div class="result-tabs" role="tablist" aria-label="成果视图">
+        <!-- 滑块：由 JS 量出当前标签的 offsetLeft/offsetWidth 平移过来（见 app.js）。
+             它**只是外观** —— 三个标签仍然是真 <button role="tab">，点击与
+             ←/→/Home/End 的行为一个字没改，aria-selected 也照旧。 -->
+        <span class="result-thumb" id="result-thumb" aria-hidden="true"></span>
+        <button class="result-tab" id="tab-live" type="button" role="tab" aria-controls="view-live" aria-selected="true" tabindex="0">当前结果</button>
+        <button class="result-tab" id="tab-gallery" type="button" role="tab" aria-controls="view-gallery" aria-selected="false" tabindex="-1">画廊</button>
+        <button class="result-tab" id="tab-jobs" type="button" role="tab" aria-controls="view-jobs" aria-selected="false" tabindex="-1">最近任务</button>
+      </div>
+    </div>
+    <div class="result-view" id="view-live" role="tabpanel" aria-labelledby="tab-live" tabindex="0"><div id="live" class="live"></div></div>
+    <div class="result-view gallery-panel" id="view-gallery" role="tabpanel" aria-labelledby="tab-gallery" tabindex="0" hidden>
+      <div class="view-heading"><h3>作品画廊</h3><span class="dim" id="gallery-count"></span></div>
+      <div class="gallery-toolbar">
+        <label class="search-field"><span class="sr-only">搜索画廊提示词或文件名</span><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" stroke="currentColor" stroke-width="1.5"/><path d="m16 16 4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg><input type="search" id="gallery-search" placeholder="搜索提示词 / 文件名…"></label>
+    <button class="ghost" id="btn-gallery-refresh">重扫</button>
+    <button class="ghost" id="btn-archived" type="button" aria-pressed="false" title="看归档目录（P20h：画廊那颗「归档」把图搬到那里，可以还原，也可以彻底删除）">已归档</button>
+      </div>
+      <div class="gallery-picks" id="gallery-picks">
+        <button class="ghost" id="btn-pick-all" type="button">全选本页</button>
+        <button class="ghost" id="btn-pick-none" type="button">清空</button>
+        <button class="ghost" id="btn-restore" type="button" disabled hidden>还原选中的 0 张</button>
+        <button class="ghost danger" id="btn-delete" type="button" disabled>归档选中的 0 张</button>
+        <span class="dim gallery-msg" id="gallery-msg" role="status" aria-live="polite"></span>
+      </div>
+  <div class="chips" id="gallery-chips"></div>
+  <details class="help-details directory-details"><summary>输出目录与来源</summary><p class="dim" id="gallery-roots"></p></details>
+  <div class="gallery" id="gallery"><p class="dim">扫描中…</p></div>
+  <div class="gallery-pager" id="gallery-pager" hidden>
+    <button class="ghost" id="btn-page-prev" type="button">‹ 上一页</button>
+    <span class="dim" id="gallery-page-info"></span>
+    <button class="ghost" id="btn-page-next" type="button">下一页 ›</button>
+  </div>
+    </div>
+
+    <div class="result-view jobs-panel" id="view-jobs" role="tabpanel" aria-labelledby="tab-jobs" tabindex="0" hidden>
+  <div class="view-heading"><h3>最近任务</h3><span class="dim" id="jobs-count"></span></div>
+  <p class="view-description dim">选择一条任务，查看结果并载入生成参数。</p>
+  <!-- 任务账只增不减，所以要给一条收尾的路（P20j）。射程由后端算：产物既不在
+       输出目录、也不在归档目录里 ⇒ 永远回不来了 ⇒ 留着只是一行取不到图的记录。
+       **归档里的不在射程内**（那些还原回来还得靠这一行）。
+       `#clean-note` 是回执的落点 —— 它明确写出「只删记录、产物文件一张不动」，
+       因为紧挨着「清理」这个词的通常是「删东西」，而被删掉的记录进不了回收站。 -->
+  <div class="jobs-toolbar">
+    <button class="ghost" id="btn-clean-jobs" type="button" disabled>清理</button>
+    <span class="dim" id="clean-note" role="status"></span>
+  </div>
+  <div class="jobs" id="jobs"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 日志台：**整页切换**，与 `main.workspace` 平级。
+     隐藏只用**属性**（`hidden`），不用 `.hidden` 类 —— 两套一起挂是最坏的一种：
+     本类里 `[hidden], .hidden { display: none !important }` **两条都吃**，
+     而 JS 里 `el.hidden = false` 只摘属性，于是「属性说显示中、CSS 让它不可见」，
+     页面上是一片空白，而 DOM 里内容一行不少（2026-10-01 实测撞上，判据读到
+     11 个环境项、112 行后端日志，截图却是空的）。
+     为什么不塞进右栏那三个标签：日志行很长，右栏只有一半宽，每一行都会折成
+     两三截；而且它要回答的问题不属于「成果」。切过来只是把工作区 `hidden`，
+     所以表单里的字、画廊的筛选、滚动位置**都不丢**，返回时原样还在。
+
+     四块内容，一次拉全：
+       环境体检 —— 工作台 / 后端 / 模型 / 探针（复用 /api/backend，不另算一套）
+       时间线   —— 事件 + 本进程的日志记录，**错误整行标红**，这是「报错信息」
+       后端日志 —— ComfyUI 自己写的那份（带时间戳），实时跟随
+       工作台日志 —— 本进程的记录（含 traceback）
+
+     为什么日志台自己轮询、而不挂在 SSE 上：**SSE 断了的时候正是最需要看日志的
+     时候**。挂上去的话，最该工作的那一刻它跟着一起瞎。 -->
+<main class="logview" id="logview" hidden>
+  <div class="log-head">
+    <button class="ghost icon-text" id="btn-logs-back" type="button"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>返回工作台</button>
+    <h2>运行日志</h2>
+    <span class="dim" id="logs-meta" role="status"></span>
+    <div class="log-tools">
+      <label class="check"><input type="checkbox" id="logs-errors-only"><span>只看错误</span></label>
+      <label class="check"><input type="checkbox" id="logs-follow" checked><span>自动跟随</span></label>
+      <button class="ghost" id="btn-logs-refresh" type="button">重扫</button>
+      <button class="ghost" id="btn-logs-copy" type="button">复制全部</button>
+    </div>
+  </div>
+  <div class="log-body">
+    <div class="log-col">
+      <section class="log-block" aria-labelledby="log-env-title">
+        <h3 id="log-env-title">环境体检</h3>
+        <dl class="kv" id="log-env"></dl>
+      </section>
+      <section class="log-block log-block-grow" aria-labelledby="log-feed-title">
+        <h3 id="log-feed-title">时间线 <span class="dim" id="logs-count"></span></h3>
+        <!-- role=log + aria-live=polite：新行会读给读屏，但不会打断它正在读的 -->
+        <div class="feed" id="log-feed" role="log" aria-live="polite"></div>
+      </section>
+    </div>
+    <div class="log-col">
+      <section class="log-block log-block-grow" aria-labelledby="log-backend-title">
+        <h3 id="log-backend-title">后端日志（ComfyUI）<span class="dim" id="log-backend-label"></span></h3>
+        <pre class="log" id="log-backend"></pre>
+        <details class="help-details"><summary>来源</summary>
+          <p class="dim" id="log-backend-sources"></p>
+        </details>
+      </section>
+      <section class="log-block log-block-grow" aria-labelledby="log-wb-title">
+        <h3 id="log-wb-title">工作台日志</h3>
+        <pre class="log" id="log-workbench"></pre>
+      </section>
+    </div>
+  </div>
+</main>
+</div>
+
+<!-- 放大视图。用 <dialog> 而不是自己搭一层遮罩：Esc 关闭、焦点陷阱、背景 inert
+     三样浏览器都给，自己搭要各写一遍，而漏掉哪一样都没有症状（用户只觉得
+     「关不掉」或「tab 跑到背后去了」）。`showModal()` 还会在关闭时把焦点
+     还给点开它的那个按钮。
+
+     里面**不只有图**：完整提示词、seed / 步数 / 尺寸 / 参考图（源图）/ 来源目录
+     都在这儿。格子上现在只剩一行小标签（2026-10-01 按用户要求去掉了那三行描述），
+     所以「这张图到底怎么出的」全归这一层 —— 「复制提示词」也就此有了第二个入口，
+     而且是**看得见再拿**的那个。参考图更是**只有这一层**看得见：格子上的
+     「载入参数」已经不碰它了（只拿数值参数），所以这行 meta 少了它就没别处了。 -->
+<dialog class="lightbox" id="lightbox" aria-labelledby="lb-name">
+  <div class="lb-bar">
+    <div class="lb-title"><strong id="lb-name"></strong><span class="dim" id="lb-meta"></span></div>
+    <div class="lb-actions">
+      <button class="ghost" id="lb-zoom" type="button">原始像素</button>
+      <button class="ghost" id="lb-copy" type="button">复制提示词</button>
+      <button class="ghost hidden" id="lb-copy-negative" type="button">复制反向词</button>
+      <button class="ghost" id="lb-copy-params" type="button">复制参数</button>
+      <button class="ghost" id="lb-load-prompt" type="button">载入提示词</button>
+      <button class="ghost" id="lb-load" type="button">载入参数</button>
+      <button class="ghost lb-step" id="lb-prev" type="button" aria-label="上一张">‹</button>
+      <button class="ghost lb-step" id="lb-next" type="button" aria-label="下一张">›</button>
+      <button class="ghost lb-close" id="lb-close" type="button" aria-label="关闭放大视图">×</button>
+    </div>
+  </div>
+  <div class="lb-stage" id="lb-stage"><img id="lb-img" alt=""></div>
+  <div class="lb-foot">
+    <!-- 提示词在 2026-10-01 被拆成**两块**（按用户要求）：反向词有内容时，
+        这两段是两件不同的东西，之前只有一段、旁边一个按钮，看不出哪个是哪个。
+        规则：**每一块只装自己那一段**（`#lb-prompt` / `#lb-negative` 里没有标签
+        文字，标签是兄弟节点）—— 「自动复制失败」那条兜底会 `selectNodeContents`
+        选中整块，标签混进去就会被一起复制走。 -->
+    <p class="lb-line"><b class="lb-tag">提示词</b><span class="lb-prompt" id="lb-prompt"></span></p>
+    <p class="lb-line hidden" id="lb-negative-wrap"><b class="lb-tag">反向词</b><span class="lb-prompt" id="lb-negative"></span></p>
+    <span class="sr-only" role="status" id="lb-status"></span>
+  </div>
+</dialog>
+
+<!-- LLM 增强的**工作区**（不再是「对照窗口」，2026-10-01 按用户要求改）。
+     一句话：**输入与处理都在这层里做**。
+
+     左边是**可编辑的输入**（初值 = 表单里对应那一栏的当前内容），右边是**稿子**
+     （增强稿 / 译稿，名字由后端那张动作表给）。底栏那颗按钮用的是**左边此刻的
+     内容**，不是你当初点开面板时的内容；它是按顶栏选好的「做什么」去做。
+
+     「采用」= **采用这一稿**（没有稿时禁用并说明），所以「采用」只有一个含义；
+     你没做处理、只是想改提示词，那本来就在表单里改（那里一直是可编辑的）。
+
+     顶栏那两个下拉框**都来自后端**（`llm.TARGETS_INFO` / `llm.ACTIONS_INFO`）：
+     「要处理哪一段」与「做什么」（增强 / 译成英文 / 译成中文）。加一个目标或加一个
+     动作都 = 后端加一行，页面这边一个字都不用改 —— 有一类判据钉着这件事。
+
+     右栏标题旁边那颗「← 移到左边」是给**接力**用的：先「增强」拿到一稿中文，
+     再把它移回左边、换成「译成英文」做第二道。它只动左边那个输入框 + 作废右栏，
+     **不写回表单** —— 写回表单是「采用」的事。
+
+     还是真 `<dialog>`：Esc、焦点陷阱、背景 inert 三样白拿，而且 Esc 的语义正是
+     我们要的默认值 —— **放弃**（不动任何东西）。 -->
+<dialog class="enhance" id="enhance" aria-labelledby="en-title">
+  <div class="en-bar">
+    <strong id="en-title">LLM 增强</strong>
+    <label class="en-pick"><span>要处理</span>
+      <select id="en-target"></select>
+    </label>
+    <label class="en-pick"><span>做什么</span>
+      <select id="en-action"></select>
+    </label>
+    <span class="dim" id="en-meta"></span>
+    <div class="en-tools">
+      <button class="ghost" id="en-close" type="button" aria-label="关闭增强面板">×</button>
+    </div>
+  </div>
+  <!-- 「这次带不带参考图、带哪几张」—— 说在明处是这个功能的一半：模型看到的是
+       哪几张图，用户必须能一眼对上，否则「它怎么写出这种东西」就没法解释了。
+       内容由 `renderEnhanceRefs()` 写（图生图/放大才带，文生图不带）。 -->
+  <p class="dim en-refs" id="en-refs"></p>
+  <div class="en-body">
+    <section class="en-pane">
+      <h4>要处理的文本 <span class="dim" id="en-from-count"></span></h4>
+      <textarea class="en-input" id="en-input" spellcheck="false"
+                aria-label="要处理的文本"></textarea>
+    </section>
+    <section class="en-pane">
+      <h4>
+        <!-- 标题与「采用」那几个字都跟着动作走（增强稿 / 译稿），文字由
+             `llm.ACTIONS_INFO` 的 `noun` 给 —— 页面里不认识任何动作 id。 -->
+        <span id="en-to-title">增强稿</span>
+        <span class="dim" id="en-to-count"></span>
+        <!-- 接力用：把这一稿放回左边，接着做下一个动作。**不写回表单**。 -->
+        <button class="ghost en-send" id="en-send" type="button">← 移到左边</button>
+      </h4>
+      <pre class="en-text" id="en-to"></pre>
+    </section>
+  </div>
+  <div class="en-foot">
+    <!-- 文字是**常量**，不是「增强」也不是正在做的那个动作 —— 具体做什么由顶栏
+         那个下拉框说了，而按钮文字一旦跟着运行时状态走，就会重新长出上一版那个
+         「永远卡在增强中…」。见下面 `en-status` 旁边那段注释。 -->
+    <button class="primary" id="en-run" type="button">执行</button>
+    <!-- 进度与报错都落这一行，**按钮文字永不变** —— 上一版是按钮自己显示
+         「增强中…」并在 finally 里「恢复」，而那个「原样」是从 DOM 里读的：
+         失败一次之后它就把「增强中…」当成原样记了下来，从此永远是它。
+         按钮文字不动，这类错就没有发生的余地。 -->
+    <span class="dim en-status" id="en-status" role="status"></span>
+    <button class="primary" id="en-adopt" type="button">采用增强稿</button>
+    <button id="en-discard" type="button">放弃</button>
+  </div>
+</dialog>
+
+<script src="/static/psd.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

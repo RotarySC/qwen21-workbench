@@ -1,0 +1,30 @@
+# 工作台的运行时依赖 —— **直接依赖**的清单（看它理解「为什么是这些包」）。
+#
+# 要装就装 `requirements-lock.txt`（实测跑绿的那一组完整版本）：
+#
+#     "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" -m venv "%LOCALAPPDATA%\qwen21-venv"
+#     "%LOCALAPPDATA%\qwen21-venv\Scripts\python.exe" -m pip install -r requirements-lock.txt
+#
+# **解释器必须建在仓库目录之外。** 若仓库所在目录带 Low 完整性标签，在其中创建的
+# 解释器会继承该标签，于是写不了 `%TEMP%` 也写不了 ComfyUI 安装目录，一键启动只能
+# 退到「受限模式」（模型能读、出图能出，但模型下载与节点安装用不了）。
+#
+# 这份清单列硬依赖，外加 psutil（可选，见文末）。Pillow 与 send2trash 是**惰性导入
+# 的可选件** —— 缺了不报错，只会静默降级（缩略图退回原图 / 一张都删不了），
+# 所以它们钉在 `requirements-lock.txt` 里，不在这里。
+#
+# 注意 starlette：这里装到的是 1.7.0，它**已经移除了** `Starlette.on_event`
+# （实测 hasattr(...) == False）。写处理器要用 lifespan（见 server.py）。
+starlette==1.7.0
+uvicorn==0.54.0
+httpx==0.28.1
+websocket-client==1.9.2
+
+# 下面几个是上面四者的直接依赖，一并钉住，免得重装时被解析到别的版本
+anyio==4.15.1
+click==8.5.0
+h11==0.16.0
+httpcore==1.0.9
+
+# 可选：工作台本身不用 psutil，P6 的后端就绪探测会用到
+psutil==7.2.2

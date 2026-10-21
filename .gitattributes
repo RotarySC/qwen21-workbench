@@ -1,0 +1,12 @@
+# 文本文件统一按 LF 存储与检出（本项目是 Python）
+* text=auto eol=lf
+
+# 测试快照要**逐字节**比对，禁止任何行尾翻译 —— 否则换台机器 clone 下来
+# 行尾一变，tests/test_legacy_cli.py 的字节断言就会假报警。
+tests/fixtures/*.json -text
+
+# 二进制
+*.png binary
+*.jpg binary
+*.safetensors binary
+*.safetensors.index.json -text

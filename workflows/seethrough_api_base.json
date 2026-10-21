@@ -1,0 +1,103 @@
+{
+  "1": {
+    "inputs": {
+      "image": "__source__.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "2": {
+    "inputs": {
+      "model": "seethroughv0.0.2_layerdiff3d_nf4_fp16",
+      "vae_ckpt": "",
+      "unet_ckpt": "",
+      "quant_mode": "nf4",
+      "cache_tag_embeds": true,
+      "group_offload": false,
+      "auto_download": false
+    },
+    "class_type": "SeeThrough_LoadLayerDiffModel",
+    "_meta": {
+      "title": "SeeThrough Load LayerDiff Model"
+    }
+  },
+  "3": {
+    "inputs": {
+      "model": "seethroughv0.0.1_marigold_nf4_fp16",
+      "quant_mode": "nf4",
+      "cache_tag_embeds": true,
+      "group_offload": false,
+      "auto_download": false
+    },
+    "class_type": "SeeThrough_LoadDepthModel",
+    "_meta": {
+      "title": "SeeThrough Load Depth Model"
+    }
+  },
+  "4": {
+    "inputs": {
+      "image": [
+        "1",
+        0
+      ],
+      "layerdiff_model": [
+        "2",
+        0
+      ],
+      "seed": 42,
+      "resolution": 1024,
+      "num_inference_steps": 30
+    },
+    "class_type": "SeeThrough_GenerateLayers",
+    "_meta": {
+      "title": "SeeThrough Generate Layers"
+    }
+  },
+  "5": {
+    "inputs": {
+      "layers": [
+        "4",
+        0
+      ],
+      "depth_model": [
+        "3",
+        0
+      ],
+      "seed": 42,
+      "resolution_depth": -1
+    },
+    "class_type": "SeeThrough_GenerateDepth",
+    "_meta": {
+      "title": "SeeThrough Generate Depth"
+    }
+  },
+  "6": {
+    "inputs": {
+      "layers_depth": [
+        "5",
+        0
+      ],
+      "tblr_split": true,
+      "use_lama": true
+    },
+    "class_type": "SeeThrough_PostProcess",
+    "_meta": {
+      "title": "SeeThrough Post Process"
+    }
+  },
+  "7": {
+    "inputs": {
+      "parts": [
+        "6",
+        0
+      ],
+      "filename_prefix": "seethrough"
+    },
+    "class_type": "SeeThrough_SavePSD",
+    "_meta": {
+      "title": "SeeThrough Save PSD"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+# 运行时状态：每次出图都会变，不进版本
+workbench/state/
+state/
+*.log
+# 冒烟脚本的临时 state 目录（正常情况下跑完自己删；崩了会留下来）
+qwen21-modes-state-*/
+smoke-modes-state-*/
+# `page_shot` 的截图**约定写在仓库外**（`../logs/page_shots_<日期>/`，README 的验收
+# 证据都是按这个路径引的）。这一条是防呆：`--out` 一旦写成仓库内的相对路径，
+# 四十来张 PNG 会静默跟着下一个 `git add -A` 一起进去。
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 本地配置覆盖
+*.local.json
+.env
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

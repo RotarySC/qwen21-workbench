@@ -1,0 +1,90 @@
+# 冻结的运行时环境 —— 实测跑绿的那一组完整版本，重建解释器时照它装。
+#
+#     "%LOCALAPPDATA%\Programs\Python\Python314\python.exe" -m venv "%LOCALAPPDATA%\qwen21-venv"
+#     "%LOCALAPPDATA%\qwen21-venv\Scripts\python.exe" -m pip install -r requirements-lock.txt
+#
+# 它比 `requirements.txt` 多出 Pillow 与 send2trash 这两个惰性导入的可选件
+# （缺了不报错，只会静默降级），以及开发期用到的工具。改它要有理由。
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+arrow==1.4.0
+attrs==26.1.0
+backoff==2.2.1
+binaryornot==0.6.0
+blake3==1.0.9
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+colorama==0.4.6
+comfy-cli==1.21.0
+comfy-mcp==0.10.0
+cookiecutter==2.7.1
+cryptography==50.0.1
+distro==1.9.0
+gitdb==4.0.12
+GitPython==3.1.62
+h11==0.16.0
+httpcore==1.0.9
+httpcore2==2.13.1
+httpx==0.28.1
+httpx2==2.13.1
+idna==3.20
+imageio-ffmpeg==0.6.0
+Jinja2==3.1.6
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+markdown-it-py==4.2.0
+MarkupSafe==3.0.3
+mcp==2.2.0
+mcp-types==2.2.0
+mdurl==0.1.2
+mixpanel==4.11.1
+opentelemetry-api==1.45.0
+packaging==26.3
+pathspec==1.1.1
+# P20e 起 LLM 增强会带参考图，缩图那一步用它（`workbench/vision.py`）。
+# 参考图在本机是 1.6~8.4 MB 的 PNG，原样发给远端端点要 2~11 MB/张。
+pillow==12.3.0
+posthog==7.60.1
+prompt_toolkit==3.0.53
+psutil==7.2.2
+pycparser==3.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+PyJWT==2.15.0
+python-dateutil==2.9.0.post0
+python-multipart==0.0.32
+python-slugify==9.1.1
+pywin32==312
+PyYAML==6.0.3
+questionary==2.1.1
+referencing==0.37.0
+requests==2.34.2
+rich==15.0.0
+rpds-py==2026.6.3
+ruff==0.16.9
+semver==3.0.4
+# P20f 起画廊能删图，删的是**回收站**而不是 `os.remove`（`workbench/trash.py`）。
+# 它是惰性 import 的：没装只让删除那条路报错，但**没装就一张都不删** ——
+# 所以「重建解释器时忘了装它」的结果是「删除按钮被禁用」，不是「图被永久删掉」。
+send2trash==2.1.0
+shellingham==1.5.4
+six==1.17.0
+smmap==5.0.3
+sse-starlette==3.4.11
+starlette==1.7.0
+text-unidecode==1.3
+tomlkit==0.15.1
+truststore==0.10.4
+typer==0.27.2
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.4
+urllib3==2.8.0
+uv==0.12.19
+uvicorn==0.54.0
+wcwidth==0.9.1
+websocket-client==1.9.2
